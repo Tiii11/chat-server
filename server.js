@@ -1,7 +1,7 @@
 // chat-server/server.js
 require('dotenv').config();
 const express = require('express');
-const cors = require('cors'); // Ensure 'cors' is installed (npm install cors)
+const cors = require('cors'); // Ensure 'cors' is installed
 const http = require('http');
 const { Server } = require("socket.io");
 const mongoose = require('mongoose');
@@ -13,12 +13,10 @@ const app = express();
 const server = http.createServer(app);
 
 // --- Socket.IO Server Initialization ---
-// CORS config specifically for Socket.IO connections
 const io = new Server(server, {
     cors: {
-        origin: "*", // Allow all origins for WebSocket connections
+        origin: "*", // CORS for WebSocket
         methods: ["GET", "POST"]
-        // You might add 'credentials: true' if needed later for socket auth with cookies
     }
 });
 
@@ -28,7 +26,7 @@ const MONGODB_URI = process.env.MONGODB_URI;
 const JWT_SECRET = process.env.JWT_SECRET;
 
 if (!MONGODB_URI || !JWT_SECRET) {
-    console.error("FATAL ERROR: MONGODB_URI or JWT_SECRET is missing.");
+    console.error("FATAL ERROR: MONGODB_URI or JWT_SECRET missing.");
     process.exit(1);
 }
 
@@ -42,24 +40,21 @@ mongoose.connect(MONGODB_URI)
 
 // --- Express Middleware ---
 
-// ** Configure CORS Options for API Routes **
+// ** Configure CORS Options **
 const corsOptions = {
-  origin: '*', // Allow all origins (Consider restricting in production to your client's URL)
-  methods: ['GET', 'POST', 'OPTIONS'], // Explicitly allow OPTIONS, GET, POST
+  origin: '*', // Allow all origins (Restrict in production)
+  methods: ['GET', 'POST', 'OPTIONS'], // Allow needed methods
   allowedHeaders: ['Content-Type', 'Authorization'], // Allow necessary headers
-  // credentials: true // Uncomment if dealing with cookies/sessions across origins
 };
 
-// ** Use CORS Middleware **
-// 1. Handle preflight OPTIONS requests globally using the options
-app.options('*', cors(corsOptions));
-// 2. Apply CORS headers with options to all other requests
+// ** Use CORS Middleware BEFORE routes **
+// This single line should handle both simple and preflight requests
 app.use(cors(corsOptions));
 
-// 3. Body Parser (comes AFTER basic CORS handling)
+// ** Use Body Parser AFTER CORS **
 app.use(express.json());
 
-// --- User Tracking (In-memory map) ---
+// --- User Tracking & Helpers ---
 const onlineUsers = {}; // { userId: { username: "...", socketId: "..." } }
 function getOnlineUsernames() {
     const usernames = new Set();
@@ -123,6 +118,7 @@ app.post('/api/auth/login', async (req, res) => {
     } catch (error) { console.error("SERVER LOG: Login error:", error); res.status(500).json({ message: 'Server login error.' }); }
 });
 
+
 // --- Socket.IO Authentication Middleware ---
 io.use((socket, next) => {
     const token = socket.handshake.auth.token;
@@ -149,20 +145,13 @@ io.on('connection', (socket) => {
     socket.broadcast.emit('user_connected', socket.username);
 
     // --- Socket Event Handlers ---
-    socket.on('send_message', (messageData) => { /* ... same global message logic ... */ });
-    socket.on('send_private_message', (data) => { /* ... same private message logic ... */ });
-    socket.on('request_user_list', () => { /* ... same user list request logic ... */ });
-    socket.on('disconnect', () => { /* ... same disconnect logic ... */ });
-
-    // Add implementations back if they were accidentally removed
-     socket.on('send_message', (messageData) => {
-        const senderUsername = socket.username; 
+    socket.on('send_message', (messageData) => {
+        const senderUsername = socket.username;
         if (!messageData || typeof messageData.text !== 'string' || messageData.text.trim() === "") { return; }
         const messageText = messageData.text.trim();
         console.log(`SERVER LOG: Global message from ${senderUsername} (${socket.id}): ${messageText}`);
         const timestamp = new Date().toISOString();
         const fullMessage = { text: messageText, senderUsername, timestamp, socketId: socket.id };
-        // TODO: Save global message to DB
         io.emit('receive_message', fullMessage);
     });
 
@@ -178,11 +167,10 @@ io.on('connection', (socket) => {
         let recipientInfo = null; let recipientUserId = null;
         const recipientUsernameLower = recipientUsername.toLowerCase();
         for (const userId in onlineUsers) { if (onlineUsers[userId].username.toLowerCase() === recipientUsernameLower) { recipientInfo = onlineUsers[userId]; recipientUserId = userId; break; } }
-        
+
         if (recipientInfo && io.sockets.sockets.get(recipientInfo.socketId)) {
             console.log(`SERVER LOG: Relaying PM from ${senderUsername} to ${recipientUsername} (socket ${recipientInfo.socketId})`);
             const timestamp = new Date().toISOString(); const messageContent = messageText.trim();
-            // TODO: Save private message to DB
             io.to(recipientInfo.socketId).emit('receive_private_message', { type: 'received', senderUsername, text: messageContent, timestamp });
             socket.emit('receive_private_message', { type: 'sent', recipientUsername, text: messageContent, timestamp });
         } else {
@@ -191,17 +179,16 @@ io.on('connection', (socket) => {
         }
     });
 
-    socket.on('request_user_list', () => {
+     socket.on('request_user_list', () => {
          console.log(`SERVER LOG: User list requested by ${socket.username} (${socket.id})`);
          socket.emit('update_user_list', getOnlineUsernames());
      });
 
     socket.on('disconnect', () => {
-        const disconnectedUsername = socket.username; // Username from authenticated socket context
+        const disconnectedUsername = socket.username;
         console.log(`SERVER LOG: User disconnected. Socket ID: ${socket.id} (Username: ${disconnectedUsername || 'Already Cleaned Up?'})`);
-        // Check using userId as it's more reliable if username wasn't set somehow (though middleware should prevent)
         if (socket.userId && onlineUsers[socket.userId]) {
-            const actualUsername = onlineUsers[socket.userId].username; // Get username from map before deleting
+            const actualUsername = onlineUsers[socket.userId].username;
             delete onlineUsers[socket.userId];
             console.log(`SERVER LOG: Broadcasting 'user_disconnected' for "${actualUsername}".`);
             io.emit('user_disconnected', actualUsername);
@@ -209,7 +196,6 @@ io.on('connection', (socket) => {
             io.emit('update_user_list', getOnlineUsernames());
         } else { console.log(`SERVER LOG: Disconnected socket ${socket.id} had no associated user in online list.`); }
     });
-
 
 }); // End io.on('connection')
 
