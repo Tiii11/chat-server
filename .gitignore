@@ -1,4 +1,7 @@
 node_modules/
+dist_electron/
 .DS_Store
-npm-debug.log*
-*.env
+npm-debug.log
+.env
+*.log
+
